@@ -56,6 +56,7 @@ export async function generateTryOn(
       input: {
         prompt: TRYON_PROMPT,
         image_urls: [modelUrl, garmentUrl],
+        aspect_ratio: "9:16", // portrait, mobile-optimized output
       },
     }),
   });

@@ -10,26 +10,20 @@ interface TryOnResultProps {
 export default function TryOnResult({ imageUrl }: TryOnResultProps) {
   const { t } = useLang();
 
-  const handleDownload = async () => {
-    try {
-      const res = await fetch(imageUrl);
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = "resellr-tryon.jpg";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-    } catch {
-      window.open(imageUrl, "_blank");
-    }
+  const handleDownload = () => {
+    // Same-origin proxy sends Content-Disposition: attachment →
+    // the browser saves the file directly, no new tab
+    const a = document.createElement("a");
+    a.href = `/api/download?url=${encodeURIComponent(imageUrl)}`;
+    a.download = "resellr-tryon.jpg";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   return (
     <div className="bg-surface border border-white/[0.06] rounded-card overflow-hidden h-full flex flex-col">
-      <div className="relative aspect-[3/4] w-full">
+      <div className="relative aspect-[9/16] w-full">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={imageUrl}

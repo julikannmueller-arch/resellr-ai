@@ -7,7 +7,6 @@ import ListingResult from "./ListingResult";
 interface Listing {
   title: string;
   description: string;
-  hashtags: string[];
 }
 
 interface ResultsPanelProps {

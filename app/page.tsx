@@ -6,6 +6,7 @@ import { LangProvider } from "@/contexts/LangContext";
 import Navigation, { Tab } from "@/components/Navigation";
 import ProgressBar from "@/components/ProgressBar";
 import GeneratorView from "@/components/GeneratorView";
+import HistoryView from "@/components/HistoryView";
 import SniperFeed from "@/components/SniperFeed";
 
 export default function Home() {
@@ -30,6 +31,16 @@ export default function Home() {
               transition={{ duration: 0.2, ease: "easeOut" }}
             >
               <GeneratorView onLoadingChange={setIsLoading} />
+            </motion.div>
+          ) : activeTab === "history" ? (
+            <motion.div
+              key="history"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+            >
+              <HistoryView />
             </motion.div>
           ) : (
             <motion.div
@@ -59,6 +70,7 @@ function BottomNav({
 }) {
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "generator", label: "Generator", icon: <GeneratorIcon /> },
+    { id: "history", label: "History", icon: <HistoryIcon /> },
     { id: "sniper", label: "Sniper", icon: <SniperIcon /> },
   ];
 
@@ -99,6 +111,21 @@ function GeneratorIcon() {
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function HistoryIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M10 6.5V10l2.5 2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

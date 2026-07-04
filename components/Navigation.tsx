@@ -6,7 +6,7 @@ import { SignInButton, UserButton, useUser } from "@clerk/nextjs";
 import { useLang } from "@/contexts/LangContext";
 import LangToggle from "./LangToggle";
 
-export type Tab = "generator" | "sniper";
+export type Tab = "generator" | "history" | "sniper";
 
 interface NavigationProps {
   activeTab: Tab;
@@ -15,6 +15,7 @@ interface NavigationProps {
 
 const TABS: { id: Tab; label: string; pro?: boolean }[] = [
   { id: "generator", label: "Generator" },
+  { id: "history", label: "History" },
   { id: "sniper", label: "Sniper", pro: true },
 ];
 

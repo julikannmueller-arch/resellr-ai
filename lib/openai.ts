@@ -3,7 +3,6 @@ import OpenAI from "openai";
 export interface Listing {
   title: string;
   description: string;
-  hashtags: string[];
 }
 
 const SYSTEM_PROMPT_DE = `Du bist ein junger Vinted-Reseller aus Deutschland. Erstelle ein Vinted-Inserat auf Deutsch.
@@ -26,13 +25,13 @@ Sie können gerne direkt über das System kaufen oder sich erst melden
 Bei weiteren Fragen oder Interesse gerne melden :) 🤝
 ---
 
-Hashtags: 30–50 Tags. Mische Markenname, Artikelart, Stil (vintage, y2k, baggy, streetwear etc.), kulturelle Referenzen (berlin, pasha, urban etc.), Saison und allgemeine Modebegriffe. Schreib sie ohne # im JSON, die App fügt sie automatisch hinzu.
+WICHTIG — Hashtags: Vinted hat kein eigenes Hashtag-Feld, deshalb gehören die Hashtags ANS ENDE der Beschreibung. Füge nach dem letzten Satz der Beschreibung genau drei Zeilenumbrüche ein (\\n\\n\\n) und danach 30–50 Hashtags in einer Zeile, getrennt durch Leerzeichen, jeder MIT # (z.B. #nike #vintage #y2k). Mische Markenname, Artikelart, Stil (vintage, y2k, baggy, streetwear etc.), kulturelle Referenzen (berlin, pasha, urban etc.), Saison und allgemeine Modebegriffe.
 
 Titel: max 60 Zeichen, direkt: Marke + Artikel + wichtigstes Merkmal.
 Beispiel: "Vintage Adidas Track Jacket Real Madrid | Y2K"
 
 Antworte NUR als JSON ohne Markdown-Blöcke oder Erklärungen:
-{"title": "...", "description": "...", "hashtags": ["tag1", "tag2", ...]}`;
+{"title": "...", "description": "..."}`;
 
 const SYSTEM_PROMPT_EN = `You are a young Vinted reseller. Create a Vinted listing in English.
 
@@ -54,13 +53,13 @@ Feel free to buy directly or message first
 Any questions or interest, just reach out :) 🤝
 ---
 
-Hashtags: 30–50 tags. Mix: brand name, item type, style (vintage, y2k, baggy, streetwear etc.), cultural references (london, berlin, urban etc.), season and general fashion terms. Write tags WITHOUT the # in the JSON array — the app adds them.
+IMPORTANT — Hashtags: Vinted has no dedicated hashtag field, so the hashtags belong AT THE END of the description. After the last sentence of the description, insert exactly three line breaks (\\n\\n\\n) followed by 30–50 hashtags on one line, separated by spaces, each WITH # (e.g. #nike #vintage #y2k). Mix: brand name, item type, style (vintage, y2k, baggy, streetwear etc.), cultural references (london, berlin, urban etc.), season and general fashion terms.
 
 Title: max 60 characters. Direct format: Brand + Item + key feature.
 Example: "Vintage Adidas Track Jacket Real Madrid | Y2K"
 
 Reply ONLY as raw JSON without markdown blocks or explanations:
-{"title": "...", "description": "...", "hashtags": ["tag1", "tag2", ...]}`;
+{"title": "...", "description": "..."}`;
 
 export async function generateListing(
   garmentImageBase64: string,
@@ -102,11 +101,7 @@ export async function generateListing(
 
   try {
     const parsed = JSON.parse(cleaned) as Listing;
-    if (
-      !parsed.title ||
-      !parsed.description ||
-      !Array.isArray(parsed.hashtags)
-    ) {
+    if (!parsed.title || !parsed.description) {
       throw new Error("Incomplete listing JSON");
     }
     return parsed;

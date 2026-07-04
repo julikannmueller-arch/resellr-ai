@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useUser, useClerk } from "@clerk/nextjs";
 import { useLang } from "@/contexts/LangContext";
@@ -11,11 +10,11 @@ import ModelPicker, { ModelType } from "./ModelPicker";
 import GenerateButton from "./GenerateButton";
 import ResultsPanel from "./ResultsPanel";
 import LangToggle from "./LangToggle";
+import StreetrunnerGame from "./StreetrunnerGame";
 
 interface Listing {
   title: string;
   description: string;
-  hashtags: string[];
 }
 
 interface Results {
@@ -24,10 +23,8 @@ interface Results {
 }
 
 interface UserStatus {
-  tier: "free" | "pro" | "unlimited";
   used: number;
-  limit: number | null;
-  resetAt: string | null;
+  limit: number;
 }
 
 interface GeneratorViewProps {
@@ -47,7 +44,42 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [listingLang, setListingLang] = useState<Lang>("de");
   const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
-  const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
+  // Game is opt-in: a prompt shows while generating; the game opens on "Play"
+  const [gameOpen, setGameOpen] = useState(false);
+  const [gameResultReady, setGameResultReady] = useState(false);
+
+  // Lock body scroll while the game takes over the viewport
+  useEffect(() => {
+    document.body.style.overflow = gameOpen ? "hidden" : "";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [gameOpen]);
+
+  // Pre-decode the try-on image so "Exit" reveals the result with zero delay
+  const preloadImage = (url: string) =>
+    new Promise<void>((resolve) => {
+      const img = new window.Image();
+      img.onload = () => resolve();
+      img.onerror = () => resolve();
+      img.src = url;
+      setTimeout(resolve, 8000); // safety net — never block the overlay forever
+    });
+
+  const handleExitGame = () => {
+    setGameOpen(false);
+    setGameResultReady(false);
+  };
+
+  // X button: if the result is already there, closing = exiting to the result;
+  // otherwise back to the prompt (which stays visible while still generating)
+  const handleCloseGame = () => {
+    if (gameResultReady) {
+      handleExitGame();
+    } else {
+      setGameOpen(false);
+    }
+  };
 
   // Fetch user's generation status whenever they sign in
   useEffect(() => {
@@ -68,8 +100,14 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
     images.length > 0 &&
     (modelType !== "custom" || customModelImage !== null);
 
-  // Button is only disabled when signed in but content missing
-  const isButtonDisabled = isLoaded && !!isSignedIn && !canGenerate;
+  const generationsLeft = userStatus
+    ? Math.max(0, userStatus.limit - userStatus.used)
+    : null;
+  const limitReached = generationsLeft === 0;
+
+  // Disabled when signed in but content missing, or the demo limit is used up
+  const isButtonDisabled =
+    isLoaded && !!isSignedIn && (!canGenerate || limitReached);
 
   const handleGenerate = async () => {
     // Not signed in → open Clerk sign-in modal
@@ -78,13 +116,14 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
       return;
     }
 
-    if (!canGenerate || isLoading) return;
+    if (!canGenerate || isLoading || limitReached) return;
 
     setIsLoading(true);
     setError(null);
     setResults(null);
-    setShowUpgradePrompt(false);
     onLoadingChange(true);
+
+    setGameResultReady(false);
 
     const modelImage =
       modelType === "custom" && customModelImage
@@ -102,13 +141,20 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
 
       if (!response.ok) {
         if (data.code === "LIMIT_REACHED") {
-          setShowUpgradePrompt(true);
+          // Sync the counter — the limit banner renders from userStatus
+          setUserStatus({ used: data.used, limit: data.limit });
+          setGameOpen(false);
           return;
         }
         throw new Error(data.error || "Generation failed");
       }
 
       setResults(data);
+
+      // Result is set — now pre-decode the try-on image before telling the
+      // game it's ready, so "Exit" reveals everything instantly
+      await preloadImage(data.tryOnUrl);
+      setGameResultReady(true);
 
       // Refresh counter after successful generation
       fetch("/api/user/status")
@@ -117,16 +163,12 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
         .catch(() => null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error occurred");
+      setGameOpen(false); // close the game so the error is visible
     } finally {
       setIsLoading(false);
       onLoadingChange(false);
     }
   };
-
-  const generationsLeft =
-    userStatus?.limit != null
-      ? Math.max(0, userStatus.limit - userStatus.used)
-      : null;
 
   return (
     <div className="space-y-8">
@@ -170,41 +212,22 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
           isLoading={isLoading}
         />
 
-        {/* Generation counter */}
-        {isLoaded && isSignedIn && userStatus && !showUpgradePrompt && (
+        {/* Remaining generations counter */}
+        {isLoaded && isSignedIn && userStatus && !limitReached && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex items-center justify-between mt-2.5 px-1"
+            className="flex items-center justify-center mt-2.5 px-1"
           >
-            <span className="text-text-muted text-xs">
-              {userStatus.limit === null ? (
-                <span className="text-green font-bold">∞ Unlimited generations</span>
-              ) : (
-                <>
-                  <span
-                    className={
-                      generationsLeft === 0
-                        ? "text-red-400 font-bold"
-                        : generationsLeft! <= 1
-                        ? "text-yellow-400 font-bold"
-                        : "text-text-muted"
-                    }
-                  >
-                    {generationsLeft} of {userStatus.limit} left
-                  </span>
-                  {" "}this month
-                </>
-              )}
+            <span
+              className={`text-xs font-bold ${
+                generationsLeft! <= 1 ? "text-yellow-400" : "text-green"
+              }`}
+            >
+              {t.genLeft
+                .replace("{n}", String(generationsLeft))
+                .replace("{total}", String(userStatus.limit))}
             </span>
-            {userStatus.tier === "free" && (
-              <Link
-                href="/pricing"
-                className="text-green text-xs font-bold hover:underline"
-              >
-                Upgrade ↗
-              </Link>
-            )}
           </motion.div>
         )}
 
@@ -216,33 +239,63 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
         )}
       </div>
 
-      {/* Upgrade prompt */}
+      {/* Play prompt while generating — reappears whenever the game is closed */}
       <AnimatePresence>
-        {showUpgradePrompt && (
+        {isLoading && !gameOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="bg-surface border border-green/30 rounded-card p-4 flex items-center justify-between gap-3"
+          >
+            <p className="text-text-secondary text-sm">{t.gamePrompt}</p>
+            <button
+              onClick={() => setGameOpen(true)}
+              className="flex-shrink-0 bg-green text-bg font-extrabold text-sm px-6 py-2.5 rounded-pill hover:bg-green/90 transition-colors"
+            >
+              {t.gamePlay} ▸
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Streetrunner: fullscreen takeover, opened via the prompt */}
+      <AnimatePresence>
+        {gameOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="fixed inset-0 z-[100] bg-bg/95 backdrop-blur-sm flex items-center justify-center p-4 md:p-8"
+          >
+            <div className="w-full max-w-[820px]">
+              <StreetrunnerGame
+                resultReady={gameResultReady}
+                onExit={handleExitGame}
+                onClose={handleCloseGame}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Demo limit reached — informational only, no payment prompt */}
+      <AnimatePresence>
+        {isLoaded && isSignedIn && limitReached && (
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.2 }}
-            className="bg-surface border border-green/20 rounded-card p-5 text-center"
+            className="bg-surface border border-green/30 rounded-card p-5 text-center"
           >
-            <p className="text-2xl mb-2">⚡</p>
-            <p className="text-white font-extrabold text-base">
-              You&apos;ve hit your monthly limit
+            <p className="text-2xl mb-2">💚</p>
+            <p className="text-green font-extrabold text-base">
+              {t.demoLimitTitle}
             </p>
-            <p className="text-text-secondary text-sm mt-1 mb-4">
-              {userStatus?.tier === "free"
-                ? "Free plan includes 3 generations/month. Upgrade for more."
-                : "You've used all 100 Pro generations this month."}
-            </p>
-            <Link
-              href="/pricing"
-              className="inline-block bg-green text-bg font-extrabold text-sm px-6 py-3 rounded-pill hover:bg-green/90 transition-colors"
-            >
-              {userStatus?.tier === "free"
-                ? "Go Pro — €9.90/month"
-                : "Go Unlimited — €19.90/month"}
-            </Link>
+            <p className="text-text-secondary text-sm mt-1">{t.demoLimitMsg}</p>
           </motion.div>
         )}
       </AnimatePresence>
@@ -257,7 +310,7 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
         </motion.div>
       )}
 
-      {results && !isLoading && (
+      {results && !isLoading && !gameOpen && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

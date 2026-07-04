@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs";
 import * as path from "path";
-import { auth } from "@clerk/nextjs/server";
+import { auth, currentUser } from "@clerk/nextjs/server";
 import { generateTryOn } from "@/lib/tryon";
 import { generateListing } from "@/lib/openai";
-import { getSupabase, TIER_LIMITS, type SubscriptionTier, type UserRecord } from "@/lib/supabase";
+import {
+  getOrCreateUser,
+  checkGenerationLimit,
+  incrementGenerationCount,
+  saveGeneration,
+} from "@/lib/supabase-helpers";
 
 export const maxDuration = 120;
 
 export async function POST(request: NextRequest) {
-  // Auth check
+  // ── 1. Verify identity server-side ─────────────────────────────────────────
   const { userId } = await auth();
   if (!userId) {
     return NextResponse.json(
@@ -18,73 +23,29 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const supabase = getSupabase();
-
-  // Get or create user record
-  let { data: user } = await supabase
-    .from("users")
-    .select("*")
-    .eq("clerk_user_id", userId)
-    .single<UserRecord>();
-
-  if (!user) {
-    const nextReset = new Date();
-    nextReset.setMonth(nextReset.getMonth() + 1);
-    nextReset.setDate(1);
-    nextReset.setHours(0, 0, 0, 0);
-
-    const { data: created } = await supabase
-      .from("users")
-      .insert({
-        clerk_user_id: userId,
-        subscription_tier: "free",
-        generations_used_this_month: 0,
-        generations_reset_at: nextReset.toISOString(),
-      })
-      .select()
-      .single<UserRecord>();
-
-    user = created;
-  }
-
-  if (!user) {
+  // ── 2. Resolve user record from Supabase ────────────────────────────────────
+  //    Any error here returns JSON, never crashes the connection.
+  let user: Awaited<ReturnType<typeof getOrCreateUser>>;
+  try {
+    const clerkUser = await currentUser();
+    const email = clerkUser?.emailAddresses[0]?.emailAddress ?? null;
+    user = await getOrCreateUser(userId, email);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Database error";
+    console.error("[/api/generate] user lookup failed:", msg);
     return NextResponse.json(
-      { error: "Failed to retrieve user record" },
-      { status: 500 }
+      { error: `Database unavailable: ${msg}`, code: "DB_ERROR" },
+      { status: 503 }
     );
   }
 
-  // Reset monthly counter if reset date has passed
-  if (user.generations_reset_at && new Date(user.generations_reset_at) <= new Date()) {
-    const nextReset = new Date();
-    nextReset.setMonth(nextReset.getMonth() + 1);
-    nextReset.setDate(1);
-    nextReset.setHours(0, 0, 0, 0);
-
-    const { data: reset } = await supabase
-      .from("users")
-      .update({
-        generations_used_this_month: 0,
-        generations_reset_at: nextReset.toISOString(),
-      })
-      .eq("clerk_user_id", userId)
-      .select()
-      .single<UserRecord>();
-
-    if (reset) user = reset;
-  }
-
-  // Check generation limit
-  const tier = (user.subscription_tier ?? "free") as SubscriptionTier;
-  const limit = TIER_LIMITS[tier];
-  const used = user.generations_used_this_month ?? 0;
-
-  if (limit !== Infinity && used >= limit) {
+  // ── 3. Enforce demo limit: 3 generations total per user ────────────────────
+  const { allowed, used, limit } = checkGenerationLimit(user);
+  if (!allowed) {
     return NextResponse.json(
       {
-        error: `You've used all ${limit} generations for this month. Upgrade to continue.`,
+        error: `You've used all ${limit} free generations for this demo. Thanks for trying Resellr AI!`,
         code: "LIMIT_REACHED",
-        tier,
         used,
         limit,
       },
@@ -92,59 +53,74 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Parse request body
+  // ── 4. Parse and validate request body ─────────────────────────────────────
+  let garmentImages: string[];
+  let modelImage: string;
+  let listingLang: "de" | "en";
+
   try {
     const body = await request.json();
-    const { garmentImages, modelImage, listingLang = "de" } = body as {
-      garmentImages: string[];
-      modelImage: string;
-      listingLang?: "en" | "de";
-    };
+    garmentImages = body.garmentImages;
+    modelImage = body.modelImage;
+    listingLang = body.listingLang === "en" ? "en" : "de";
+  } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
 
-    if (!garmentImages || garmentImages.length === 0) {
+  if (!Array.isArray(garmentImages) || garmentImages.length === 0) {
+    return NextResponse.json({ error: "No clothing photo uploaded" }, { status: 400 });
+  }
+  if (typeof modelImage !== "string" || modelImage.trim() === "") {
+    return NextResponse.json({ error: "No model selected" }, { status: 400 });
+  }
+
+  // ── 5. Resolve preset model to base64 ───────────────────────────────────────
+  let resolvedModelImage: string;
+  if (modelImage.startsWith("preset:")) {
+    const modelId = modelImage.split(":")[1];
+    const imagePath = path.join(process.cwd(), "public", "models", `${modelId}.jpg`);
+    if (!fs.existsSync(imagePath)) {
       return NextResponse.json(
-        { error: "No clothing photo uploaded" },
+        { error: "Preset model not found. Please upload your own model photo." },
         { status: 400 }
       );
     }
+    const buffer = fs.readFileSync(imagePath);
+    resolvedModelImage = `data:image/jpeg;base64,${buffer.toString("base64")}`;
+  } else {
+    resolvedModelImage = modelImage;
+  }
 
-    let resolvedModelImage: string;
-
-    if (modelImage.startsWith("preset:")) {
-      const modelId = modelImage.split(":")[1];
-      const imagePath = path.join(process.cwd(), "public", "models", `${modelId}.jpg`);
-
-      if (!fs.existsSync(imagePath)) {
-        return NextResponse.json(
-          { error: "Preset model not found. Please upload your own model photo." },
-          { status: 400 }
-        );
-      }
-
-      const buffer = fs.readFileSync(imagePath);
-      resolvedModelImage = `data:image/jpeg;base64,${buffer.toString("base64")}`;
-    } else {
-      resolvedModelImage = modelImage;
-    }
-
+  // ── 6. Run try-on + listing generation ─────────────────────────────────────
+  try {
     const garmentImage = garmentImages[0];
-
     const [tryOnUrl, listing] = await Promise.all([
       generateTryOn(resolvedModelImage, garmentImage),
       generateListing(garmentImage, listingLang),
     ]);
 
-    // Increment generation counter on success
-    await supabase
-      .from("users")
-      .update({ generations_used_this_month: used + 1 })
-      .eq("clerk_user_id", userId);
+    // ── 7. Persist to DB — errors here are logged but never surface to the user
+    //    (the generation already succeeded; we don't want to discard the result)
+    try {
+      await Promise.all([
+        incrementGenerationCount(user.id, used),
+        saveGeneration(user.id, {
+          imageUrl: tryOnUrl,
+          listingTitle: listing.title,
+          listingDescription: listing.description,
+          modelUsed: modelImage,
+          language: listingLang,
+        }),
+      ]);
+    } catch (dbErr) {
+      // Non-fatal: generation succeeded, DB save failed — log and continue
+      console.error("[/api/generate] DB save failed (non-fatal):", dbErr);
+    }
 
     return NextResponse.json({ tryOnUrl, listing });
   } catch (err) {
     console.error("[/api/generate]", err);
-    const message =
-      err instanceof Error ? err.message : "Unknown error occurred";
+    const message = err instanceof Error ? err.message : "Unknown error occurred";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

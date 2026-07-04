@@ -7,7 +7,6 @@ import { useLang } from "@/contexts/LangContext";
 interface Listing {
   title: string;
   description: string;
-  hashtags: string[];
 }
 
 interface ListingResultProps {
@@ -63,9 +62,6 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 
 export default function ListingResult({ listing }: ListingResultProps) {
   const { t } = useLang();
-  const hashtagString = listing.hashtags
-    .map((h) => (h.startsWith("#") ? h : `#${h}`))
-    .join(" ");
 
   return (
     <div className="bg-surface border border-white/[0.06] rounded-card p-4 flex flex-col gap-4 h-full">
@@ -88,30 +84,10 @@ export default function ListingResult({ listing }: ListingResultProps) {
           </span>
           <CopyButton text={listing.description} />
         </div>
+        {/* Hashtags are part of the description now — Vinted has no separate hashtag field */}
         <p className="text-text-secondary text-xs leading-relaxed whitespace-pre-line">
           {listing.description}
         </p>
-      </div>
-
-      <div className="h-px bg-white/[0.06]" />
-
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-text-muted text-[10px] font-extrabold uppercase tracking-widest">
-            {t.listingHashtags}
-          </span>
-          <CopyButton text={hashtagString} label={t.copyAll} />
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {listing.hashtags.map((tag, i) => (
-            <span
-              key={i}
-              className="px-2 py-0.5 bg-white/[0.05] rounded-pill text-text-secondary text-[10px] border border-white/[0.06]"
-            >
-              {tag.startsWith("#") ? tag : `#${tag}`}
-            </span>
-          ))}
-        </div>
       </div>
     </div>
   );
