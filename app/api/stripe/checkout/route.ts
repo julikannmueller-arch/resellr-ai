@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { stripe, STRIPE_PRICES } from "@/lib/stripe";
-import { supabase } from "@/lib/supabase";
+import { getStripe, STRIPE_PRICES } from "@/lib/stripe";
+import { getSupabase } from "@/lib/supabase";
 
 export async function POST(request: NextRequest) {
   const { userId } = await auth();
@@ -15,7 +15,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid tier" }, { status: 400 });
   }
 
-  // Get or create Stripe customer
+  const stripe = getStripe();
+  const supabase = getSupabase();
+
   const { data: user } = await supabase
     .from("users")
     .select("stripe_customer_id")
@@ -39,9 +41,7 @@ export async function POST(request: NextRequest) {
     payment_method_types: ["card"],
     line_items: [{ price: priceId, quantity: 1 }],
     metadata: { clerk_user_id: userId },
-    subscription_data: {
-      metadata: { clerk_user_id: userId },
-    },
+    subscription_data: { metadata: { clerk_user_id: userId } },
     success_url: `${process.env.NEXT_PUBLIC_APP_URL}/pricing?success=true`,
     cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/pricing`,
   });

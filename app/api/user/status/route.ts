@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { supabase, TIER_LIMITS, type SubscriptionTier } from "@/lib/supabase";
+import { getSupabase, TIER_LIMITS, type SubscriptionTier } from "@/lib/supabase";
 
 export async function GET() {
   const { userId } = await auth();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const supabase = getSupabase();
 
   const { data: user } = await supabase
     .from("users")

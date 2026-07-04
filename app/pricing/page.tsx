@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { useUser, useClerk, SignInButton, UserButton } from "@clerk/nextjs";
+import { useUser, useClerk, SignInButton } from "@clerk/nextjs";
 
 interface PricingTier {
   id: "free" | "pro" | "unlimited";
@@ -74,27 +74,54 @@ const TIERS: PricingTier[] = [
   },
 ];
 
-export default function PricingPage() {
+// Separate component so useSearchParams is inside a Suspense boundary
+function SuccessBanner() {
   const searchParams = useSearchParams();
   const success = searchParams.get("success") === "true";
-  const { isSignedIn } = useUser();
-  const { openSignIn } = useClerk();
-  const [loadingTier, setLoadingTier] = useState<string | null>(null);
-  const [showSuccess, setShowSuccess] = useState(success);
+  const [show, setShow] = useState(success);
 
   useEffect(() => {
     if (success) {
-      const t = setTimeout(() => setShowSuccess(false), 8000);
+      const t = setTimeout(() => setShow(false), 8000);
       return () => clearTimeout(t);
     }
   }, [success]);
+
+  return (
+    <AnimatePresence>
+      {show && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          className="mb-8 bg-green/10 border border-green/30 rounded-card p-4 flex items-center gap-3"
+        >
+          <span className="text-2xl">🎉</span>
+          <div>
+            <p className="text-green font-extrabold text-sm">Subscription activated!</p>
+            <p className="text-text-secondary text-xs mt-0.5">
+              You&apos;re all set — go generate some listings.
+            </p>
+          </div>
+          <Link href="/" className="ml-auto text-green text-xs font-bold hover:underline">
+            Open Generator →
+          </Link>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+export default function PricingPage() {
+  const { isSignedIn } = useUser();
+  const { openSignIn } = useClerk();
+  const [loadingTier, setLoadingTier] = useState<string | null>(null);
 
   const handleUpgrade = async (tier: "pro" | "unlimited") => {
     if (!isSignedIn) {
       openSignIn();
       return;
     }
-
     setLoadingTier(tier);
     try {
       const res = await fetch("/api/stripe/checkout", {
@@ -103,9 +130,7 @@ export default function PricingPage() {
         body: JSON.stringify({ tier }),
       });
       const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      }
+      if (data.url) window.location.href = data.url;
     } catch {
       setLoadingTier(null);
     }
@@ -113,19 +138,13 @@ export default function PricingPage() {
 
   return (
     <div className="min-h-screen bg-bg">
-      {/* Minimal header */}
+      {/* Header */}
       <header className="fixed top-0 left-0 right-0 z-50 border-b border-white/[0.06] bg-bg/90 backdrop-blur-md">
         <div className="max-w-[900px] mx-auto px-4 h-14 flex items-center justify-between">
-          <Link
-            href="/"
-            className="font-extrabold text-base tracking-tight text-white hover:text-white/80 transition-colors"
-          >
+          <Link href="/" className="font-extrabold text-base tracking-tight text-white hover:text-white/80 transition-colors">
             Resellr AI
           </Link>
-          <Link
-            href="/"
-            className="text-xs font-bold text-text-muted hover:text-text-secondary transition-colors flex items-center gap-1"
-          >
+          <Link href="/" className="text-xs font-bold text-text-muted hover:text-text-secondary transition-colors">
             ← Back to Generator
           </Link>
         </div>
@@ -134,35 +153,10 @@ export default function PricingPage() {
       <div className="h-14" />
 
       <main className="max-w-[900px] mx-auto px-4 py-12 pb-20">
-        {/* Success banner */}
-        <AnimatePresence>
-          {showSuccess && (
-            <motion.div
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              className="mb-8 bg-green/10 border border-green/30 rounded-card p-4 flex items-center gap-3"
-            >
-              <span className="text-2xl">🎉</span>
-              <div>
-                <p className="text-green font-extrabold text-sm">
-                  Subscription activated!
-                </p>
-                <p className="text-text-secondary text-xs mt-0.5">
-                  You&apos;re all set — go generate some listings.
-                </p>
-              </div>
-              <Link
-                href="/"
-                className="ml-auto text-green text-xs font-bold hover:underline"
-              >
-                Open Generator →
-              </Link>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <Suspense fallback={null}>
+          <SuccessBanner />
+        </Suspense>
 
-        {/* Hero */}
         <div className="text-center mb-12">
           <h1 className="text-4xl md:text-5xl font-extrabold text-white tracking-tight">
             Plans &amp; <span className="text-green">Pricing</span>
@@ -172,7 +166,6 @@ export default function PricingPage() {
           </p>
         </div>
 
-        {/* Tier cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {TIERS.map((tier, i) => (
             <motion.div
@@ -181,9 +174,7 @@ export default function PricingPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, delay: i * 0.08 }}
               className={`relative bg-surface rounded-card p-6 flex flex-col border transition-all ${
-                tier.highlight
-                  ? "border-green shadow-glow-green"
-                  : "border-white/[0.08]"
+                tier.highlight ? "border-green shadow-glow-green" : "border-white/[0.08]"
               }`}
             >
               {tier.highlight && (
@@ -194,32 +185,23 @@ export default function PricingPage() {
                 </div>
               )}
 
-              {/* Header */}
               <div className="mb-6">
                 <p className="text-text-muted text-xs font-extrabold uppercase tracking-widest mb-1">
                   {tier.name}
                 </p>
                 <div className="flex items-baseline gap-1 mb-1">
-                  <span className="text-4xl font-extrabold text-white">
-                    {tier.price}
-                  </span>
+                  <span className="text-4xl font-extrabold text-white">{tier.price}</span>
                   <span className="text-text-muted text-sm">{tier.period}</span>
                 </div>
                 <p className="text-text-muted text-sm">{tier.description}</p>
               </div>
 
-              {/* Limit badge */}
               <div className="mb-5 bg-white/[0.04] rounded-input px-3 py-2">
-                <p
-                  className={`text-sm font-extrabold ${
-                    tier.highlight ? "text-green" : "text-white"
-                  }`}
-                >
+                <p className={`text-sm font-extrabold ${tier.highlight ? "text-green" : "text-white"}`}>
                   {tier.limit}
                 </p>
               </div>
 
-              {/* Features */}
               <ul className="space-y-2.5 mb-8 flex-1">
                 {tier.features.map((f) => (
                   <li key={f} className="flex items-start gap-2.5 text-sm">
@@ -229,7 +211,6 @@ export default function PricingPage() {
                 ))}
               </ul>
 
-              {/* CTA */}
               {tier.id === "free" ? (
                 isSignedIn ? (
                   <Link
@@ -262,7 +243,6 @@ export default function PricingPage() {
           ))}
         </div>
 
-        {/* Footer note */}
         <p className="text-center text-text-muted text-xs mt-10">
           All prices include VAT where applicable. Subscriptions are billed monthly and can be cancelled any time.
         </p>
@@ -273,13 +253,7 @@ export default function PricingPage() {
 
 function CheckIcon({ highlight }: { highlight: boolean }) {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
-      fill="none"
-      className="mt-0.5 flex-shrink-0"
-    >
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="mt-0.5 flex-shrink-0">
       <circle cx="7" cy="7" r="7" fill={highlight ? "#1ED760" : "rgba(255,255,255,0.08)"} />
       <path
         d="M4 7l2 2 4-3.5"

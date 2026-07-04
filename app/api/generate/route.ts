@@ -4,7 +4,7 @@ import * as path from "path";
 import { auth } from "@clerk/nextjs/server";
 import { generateTryOn } from "@/lib/tryon";
 import { generateListing } from "@/lib/openai";
-import { supabase, TIER_LIMITS, type SubscriptionTier, type UserRecord } from "@/lib/supabase";
+import { getSupabase, TIER_LIMITS, type SubscriptionTier, type UserRecord } from "@/lib/supabase";
 
 export const maxDuration = 120;
 
@@ -17,6 +17,8 @@ export async function POST(request: NextRequest) {
       { status: 401 }
     );
   }
+
+  const supabase = getSupabase();
 
   // Get or create user record
   let { data: user } = await supabase

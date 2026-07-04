@@ -1,10 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-// Service role client — bypasses RLS, only used server-side in API routes
-export const supabase = createClient(supabaseUrl, supabaseServiceKey);
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type SubscriptionTier = "free" | "pro" | "unlimited";
 
@@ -24,3 +18,15 @@ export const TIER_LIMITS: Record<SubscriptionTier, number> = {
   pro: 100,
   unlimited: Infinity,
 };
+
+let _client: SupabaseClient | null = null;
+
+export function getSupabase(): SupabaseClient {
+  if (!_client) {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) throw new Error("Supabase not configured — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY");
+    _client = createClient(url, key);
+  }
+  return _client;
+}

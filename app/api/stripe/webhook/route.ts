@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import Stripe from "stripe";
-import { stripe, tierFromPriceId } from "@/lib/stripe";
-import { supabase } from "@/lib/supabase";
+import { getStripe, tierFromPriceId } from "@/lib/stripe";
+import { getSupabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +12,9 @@ export async function POST(request: NextRequest) {
   if (!sig) {
     return new Response("Missing stripe-signature header", { status: 400 });
   }
+
+  const stripe = getStripe();
+  const supabase = getSupabase();
 
   let event: Stripe.Event;
   try {
@@ -31,15 +34,10 @@ export async function POST(request: NextRequest) {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
       const clerkUserId = session.metadata?.clerk_user_id;
-      if (!clerkUserId || !session.subscription) {
-        return new Response("OK");
-      }
+      if (!clerkUserId || !session.subscription) return new Response("OK");
 
-      const sub = await stripe.subscriptions.retrieve(
-        session.subscription as string
-      );
-      const priceId = sub.items.data[0].price.id;
-      const tier = tierFromPriceId(priceId);
+      const sub = await stripe.subscriptions.retrieve(session.subscription as string);
+      const tier = tierFromPriceId(sub.items.data[0].price.id);
 
       await supabase.from("users").upsert(
         {
@@ -50,32 +48,24 @@ export async function POST(request: NextRequest) {
         },
         { onConflict: "clerk_user_id" }
       );
-
       console.log("[webhook] upgraded", clerkUserId, "to", tier);
     }
 
     if (event.type === "customer.subscription.updated") {
       const sub = event.data.object as Stripe.Subscription;
-      const priceId = sub.items.data[0].price.id;
-      const tier = tierFromPriceId(priceId);
-
+      const tier = tierFromPriceId(sub.items.data[0].price.id);
       await supabase
         .from("users")
         .update({ subscription_tier: tier })
         .eq("stripe_subscription_id", sub.id);
-
-      console.log("[webhook] subscription updated, tier:", tier);
     }
 
     if (event.type === "customer.subscription.deleted") {
       const sub = event.data.object as Stripe.Subscription;
-
       await supabase
         .from("users")
         .update({ subscription_tier: "free", stripe_subscription_id: null })
         .eq("stripe_subscription_id", sub.id);
-
-      console.log("[webhook] subscription cancelled, downgraded to free");
     }
   } catch (err) {
     console.error("[webhook] handler error:", err);
