@@ -11,6 +11,7 @@ import GenerateButton from "./GenerateButton";
 import ResultsPanel from "./ResultsPanel";
 import LangToggle from "./LangToggle";
 import StreetrunnerGame from "./StreetrunnerGame";
+import { creditCost, MODEL_LABELS, type TryOnModel } from "@/lib/pricing";
 
 interface Listing {
   title: string;
@@ -19,12 +20,16 @@ interface Listing {
 
 interface Results {
   tryOnUrl: string;
-  listing: Listing;
+  /** DB row id — needed to attach an optional listing later (null if save failed). */
+  generationId: string | null;
+  /** The garment photo used, kept so the on-demand listing call can reuse it. */
+  garmentImage: string;
+  /** Null until the user generates a description. */
+  listing: Listing | null;
 }
 
 interface UserStatus {
-  used: number;
-  limit: number;
+  credits: number;
   unlimited?: boolean;
 }
 
@@ -44,9 +49,14 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
   const [results, setResults] = useState<Results | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listingLang, setListingLang] = useState<Lang>("de");
+  // Try-on model + 4K flag drive the credit price (see lib/pricing.ts).
+  const [model, setModel] = useState<TryOnModel>("nb2");
+  const [is4k, setIs4k] = useState(false);
   const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
   // Seconds left on the burst rate-limit cooldown (from a 429 Retry-After). 0 = clear.
   const [cooldown, setCooldown] = useState(0);
+  // Spinner state for the optional on-demand listing generation.
+  const [listingLoading, setListingLoading] = useState(false);
   // Game is opt-in: a prompt shows while generating; the game opens on "Play"
   const [gameOpen, setGameOpen] = useState(false);
   const [gameResultReady, setGameResultReady] = useState(false);
@@ -112,16 +122,16 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
     (modelType !== "custom" || customModelImage !== null);
 
   const isUnlimited = userStatus?.unlimited === true;
-  const generationsLeft = userStatus
-    ? Math.max(0, userStatus.limit - userStatus.used)
-    : null;
-  // Unlimited users never hit the limit — keep the button enabled regardless.
-  const limitReached = !isUnlimited && generationsLeft === 0;
+  const credits = userStatus?.credits ?? null;
+  const cost = creditCost({ model, is4k });
+  // Unlimited users are exempt; everyone else needs enough credits for the pick.
+  const notEnoughCredits =
+    !isUnlimited && credits !== null && credits < cost;
 
-  // Disabled when signed in but content missing, the demo limit is used up, or
-  // a burst-rate-limit cooldown is running.
+  // Disabled when signed in but content missing, credits too low, or a
+  // burst-rate-limit cooldown is running.
   const isButtonDisabled =
-    isLoaded && !!isSignedIn && (!canGenerate || limitReached || cooldown > 0);
+    isLoaded && !!isSignedIn && (!canGenerate || notEnoughCredits || cooldown > 0);
 
   const handleGenerate = async () => {
     // Not signed in → open Clerk sign-in modal
@@ -130,7 +140,7 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
       return;
     }
 
-    if (!canGenerate || isLoading || limitReached || cooldown > 0) return;
+    if (!canGenerate || isLoading || notEnoughCredits || cooldown > 0) return;
 
     setIsLoading(true);
     setError(null);
@@ -138,6 +148,8 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
     onLoadingChange(true);
 
     setGameResultReady(false);
+    // Pop the minigame open immediately — it runs through the whole wait.
+    setGameOpen(true);
 
     const modelImage =
       modelType === "custom" && customModelImage
@@ -148,15 +160,18 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ garmentImages: images, modelImage, listingLang }),
+        body: JSON.stringify({ garmentImages: images, modelImage, listingLang, model, is4k }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        if (data.code === "LIMIT_REACHED") {
-          // Sync the counter — the limit banner renders from userStatus
-          setUserStatus({ used: data.used, limit: data.limit });
+        if (data.code === "INSUFFICIENT_CREDITS") {
+          // Sync the balance the server reported, then surface the message
+          if (typeof data.credits === "number") {
+            setUserStatus((s) => (s ? { ...s, credits: data.credits } : s));
+          }
+          setError(data.error || "Not enough credits");
           setGameOpen(false);
           return;
         }
@@ -177,24 +192,62 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
         throw new Error(data.error || "Generation failed");
       }
 
-      setResults(data);
+      // Image-only result — the listing is generated later on demand.
+      setResults({
+        tryOnUrl: data.tryOnUrl,
+        generationId: data.generationId ?? null,
+        garmentImage: images[0],
+        listing: null,
+      });
+
+      // Server returns the post-charge balance — apply it immediately.
+      if (typeof data.credits === "number") {
+        setUserStatus((s) =>
+          s
+            ? { ...s, credits: data.credits }
+            : { credits: data.credits, unlimited: data.unlimited === true }
+        );
+      }
 
       // Result is set — now pre-decode the try-on image before telling the
       // game it's ready, so "Exit" reveals everything instantly
       await preloadImage(data.tryOnUrl);
       setGameResultReady(true);
-
-      // Refresh counter after successful generation
-      fetch("/api/user/status")
-        .then((r) => r.json())
-        .then((d) => { if (!d.error) setUserStatus(d); })
-        .catch(() => null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error occurred");
       setGameOpen(false); // close the game so the error is visible
     } finally {
       setIsLoading(false);
       onLoadingChange(false);
+    }
+  };
+
+  // Optional, on-demand: generate the Vinted listing text for the current result.
+  // No credits are charged — the image already paid; this only spends a GPT call.
+  const handleGenerateListing = async () => {
+    if (!results || !results.generationId || listingLoading) return;
+
+    setListingLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/generate/listing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          generationId: results.generationId,
+          garmentImage: results.garmentImage,
+          listingLang,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Listing generation failed");
+      }
+      setResults((r) => (r ? { ...r, listing: data.listing } : r));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error occurred");
+    } finally {
+      setListingLoading(false);
     }
   };
 
@@ -234,6 +287,53 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
             <LangToggle value={listingLang} onChange={setListingLang} />
           </div>
         </div>
+
+        {/* Model + quality selection → drives the credit price */}
+        <div className="space-y-1.5 mb-3">
+          <div className="flex gap-1.5">
+            {(["pro", "nb2"] as TryOnModel[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setModel(m)}
+                className={`flex-1 rounded-input px-3 py-2.5 text-sm font-bold border transition-colors ${
+                  model === m
+                    ? "bg-green/10 border-green text-green"
+                    : "bg-surface border-white/[0.08] text-text-secondary hover:border-white/20"
+                }`}
+              >
+                {MODEL_LABELS[m]}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1.5">
+            {([false, true] as const).map((v) => (
+              <button
+                key={String(v)}
+                type="button"
+                onClick={() => setIs4k(v)}
+                className={`flex-1 rounded-input px-3 py-2 text-sm font-bold border transition-colors ${
+                  is4k === v
+                    ? "bg-green/10 border-green text-green"
+                    : "bg-surface border-white/[0.08] text-text-secondary hover:border-white/20"
+                }`}
+              >
+                {v ? t.res4k : t.resStandard}
+              </button>
+            ))}
+          </div>
+          {/* Live price line, e.g. "Nano Banana 2 · 4K — 10 Credits" */}
+          <div className="flex items-center justify-center pt-0.5">
+            <span className="text-xs font-bold text-text-secondary">
+              {MODEL_LABELS[model]}
+              {is4k ? " · 4K" : ""} —{" "}
+              <span className="text-green">
+                {cost} {t.creditsUnit}
+              </span>
+            </span>
+          </div>
+        </div>
+
         <GenerateButton
           onClick={handleGenerate}
           disabled={isButtonDisabled}
@@ -264,8 +364,8 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
           </motion.div>
         )}
 
-        {/* Remaining generations counter */}
-        {isLoaded && isSignedIn && userStatus && !isUnlimited && !limitReached && (
+        {/* Available credits */}
+        {isLoaded && isSignedIn && !isUnlimited && credits !== null && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -273,12 +373,14 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
           >
             <span
               className={`text-xs font-bold ${
-                generationsLeft! <= 1 ? "text-yellow-400" : "text-green"
+                notEnoughCredits
+                  ? "text-red-400"
+                  : credits < cost * 2
+                  ? "text-yellow-400"
+                  : "text-green"
               }`}
             >
-              {t.genLeft
-                .replace("{n}", String(generationsLeft))
-                .replace("{total}", String(userStatus.limit))}
+              {t.creditsAvailable.replace("{n}", String(credits))}
             </span>
           </motion.div>
         )}
@@ -333,25 +435,6 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
         )}
       </AnimatePresence>
 
-      {/* Demo limit reached — informational only, no payment prompt */}
-      <AnimatePresence>
-        {isLoaded && isSignedIn && limitReached && (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
-            transition={{ duration: 0.2 }}
-            className="bg-surface border border-green/30 rounded-card p-5 text-center"
-          >
-            <p className="text-2xl mb-2">💚</p>
-            <p className="text-green font-extrabold text-base">
-              {t.demoLimitTitle}
-            </p>
-            <p className="text-text-secondary text-sm mt-1">{t.demoLimitMsg}</p>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {error && (
         <motion.div
           initial={{ opacity: 0, y: 4 }}
@@ -369,7 +452,13 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
           transition={{ duration: 0.2 }}
         >
           <SectionLabel label={t.s04} />
-          <ResultsPanel tryOnUrl={results.tryOnUrl} listing={results.listing} />
+          <ResultsPanel
+            tryOnUrl={results.tryOnUrl}
+            listing={results.listing}
+            canGenerateListing={results.generationId !== null}
+            listingLoading={listingLoading}
+            onGenerateListing={handleGenerateListing}
+          />
         </motion.div>
       )}
     </div>

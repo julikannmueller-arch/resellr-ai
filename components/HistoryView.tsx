@@ -159,51 +159,59 @@ export default function HistoryView() {
                     {g.listing_title ?? "—"}
                   </p>
 
-                  {/* Copy full listing text */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleCopy(g);
-                    }}
-                    title={t.copy}
-                    className="flex-shrink-0 text-text-muted hover:text-white transition-colors p-1 -m-1"
-                  >
-                    <AnimatePresence mode="wait">
-                      {copied ? (
-                        <motion.span
-                          key="check"
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.8 }}
-                          transition={{ duration: 0.15 }}
-                          className="flex items-center gap-1 text-green text-[10px] font-bold"
-                        >
-                          <CheckIcon />
-                          {t.copied}
-                        </motion.span>
-                      ) : (
-                        <motion.span
-                          key="copy"
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.8 }}
-                          transition={{ duration: 0.15 }}
-                          className="block"
-                        >
-                          <CopyIcon />
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
-                  </button>
+                  {/* Copy full listing text — only when a description exists */}
+                  {g.listing_description && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCopy(g);
+                      }}
+                      title={t.copy}
+                      className="flex-shrink-0 text-text-muted hover:text-white transition-colors p-1 -m-1"
+                    >
+                      <AnimatePresence mode="wait">
+                        {copied ? (
+                          <motion.span
+                            key="check"
+                            initial={{ opacity: 0, scale: 0.8 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.8 }}
+                            transition={{ duration: 0.15 }}
+                            className="flex items-center gap-1 text-green text-[10px] font-bold"
+                          >
+                            <CheckIcon />
+                            {t.copied}
+                          </motion.span>
+                        ) : (
+                          <motion.span
+                            key="copy"
+                            initial={{ opacity: 0, scale: 0.8 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.8 }}
+                            transition={{ duration: 0.15 }}
+                            className="block"
+                          >
+                            <CopyIcon />
+                          </motion.span>
+                        )}
+                      </AnimatePresence>
+                    </button>
+                  )}
                 </div>
 
-                <p
-                  className={`text-text-secondary text-xs leading-relaxed mt-1.5 whitespace-pre-line ${
-                    expanded ? "" : "line-clamp-4"
-                  }`}
-                >
-                  {g.listing_description ?? ""}
-                </p>
+                {g.listing_description ? (
+                  <p
+                    className={`text-text-secondary text-xs leading-relaxed mt-1.5 whitespace-pre-line ${
+                      expanded ? "" : "line-clamp-4"
+                    }`}
+                  >
+                    {g.listing_description}
+                  </p>
+                ) : (
+                  <p className="text-text-muted text-xs italic mt-1.5">
+                    {t.noDescription}
+                  </p>
+                )}
 
                 <div className="mt-auto pt-2 flex items-center gap-2">
                   <span className="text-text-muted text-[10px] font-bold">

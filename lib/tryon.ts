@@ -4,10 +4,24 @@ const TRYON_PROMPT =
   "The person in the first image should wear the pants/clothing from the second image. Keep everything else exactly the same — same person, same pose, same background, same top. Only replace the clothing item with the one from the second image, preserving all details, stitching, color and wash exactly.";
 
 async function toPublicUrl(base64DataUrl: string): Promise<string> {
-  const match = base64DataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
-  if (!match) throw new Error("Invalid image format");
+  // Parse "data:<mime>;base64,<payload>" via string slicing, NOT a regex. A
+  // capture-group regex with an unbounded quantifier (`([\s\S]+)`) over a
+  // multi-MB data URL can blow V8's regex stack ("Maximum call stack size
+  // exceeded") when invoked from a deep async server context. Slicing is O(1)
+  // stack and safe at any image size.
+  const semi = base64DataUrl.indexOf(";");
+  const comma = base64DataUrl.indexOf(",");
+  if (
+    !base64DataUrl.startsWith("data:") ||
+    semi < 5 ||
+    comma < semi ||
+    !base64DataUrl.slice(semi + 1, comma).includes("base64")
+  ) {
+    throw new Error("Invalid image format");
+  }
 
-  const [, mimeType, b64] = match;
+  const mimeType = base64DataUrl.slice(5, semi);
+  const b64 = base64DataUrl.slice(comma + 1);
   const buffer = Buffer.from(b64, "base64");
   const ext = mimeType.includes("png") ? "png" : "jpg";
 
@@ -32,9 +46,17 @@ async function toPublicUrl(base64DataUrl: string): Promise<string> {
   return url;
 }
 
+export interface TryOnOptions {
+  /** PiAPI task_type — chosen model (nano-banana-pro | nano-banana-2). */
+  taskType: "nano-banana-pro" | "nano-banana-2";
+  /** PiAPI resolution — "1K" (standard) or "4K". Same field for both models. */
+  resolution: "1K" | "4K";
+}
+
 export async function generateTryOn(
   modelImageBase64: string,
-  garmentImageBase64: string
+  garmentImageBase64: string,
+  opts: TryOnOptions
 ): Promise<string> {
   const apiKey = process.env.PIAPI_KEY;
   if (!apiKey) throw new Error("PIAPI_KEY not configured");
@@ -52,11 +74,12 @@ export async function generateTryOn(
     },
     body: JSON.stringify({
       model: "gemini",
-      task_type: "nano-banana-pro",
+      task_type: opts.taskType,
       input: {
         prompt: TRYON_PROMPT,
         image_urls: [modelUrl, garmentUrl],
         aspect_ratio: "9:16", // portrait, mobile-optimized output
+        resolution: opts.resolution,
       },
     }),
   });

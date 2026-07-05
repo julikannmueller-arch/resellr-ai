@@ -8,23 +8,27 @@
  * as the primary key — never data from outside the server.
  */
 
-import { getSupabase, DEMO_GENERATION_LIMIT, type UserRecord, type GenerationRecord } from "./supabase";
+import { getSupabase, type UserRecord, type GenerationRecord } from "./supabase";
+import { STARTING_CREDITS } from "./pricing";
 
 export interface GenerationData {
   imageUrl: string;
-  listingTitle: string;
-  /** Full description — hashtags are included at the end (Vinted has no separate field) */
-  listingDescription: string;
+  /** Model photo reference (e.g. "preset:model-01" or a base64 data URL). */
   modelUsed: string;
+  /** Chosen AI model: "pro" | "nb2". */
+  aiModel: string;
+  /** Chosen resolution: "1K" | "4K". */
+  resolution: string;
   language: "de" | "en";
+  /** Listing is optional — generated later on demand, otherwise null. */
+  listingTitle?: string | null;
+  /** Full description — hashtags are included at the end (Vinted has no separate field) */
+  listingDescription?: string | null;
 }
 
 /**
  * Returns the user record for the given Clerk user ID, creating one if it
- * doesn't exist yet.
- *
- * Demo phase: the generation counter is LIFETIME — no monthly reset.
- * (generations_used_this_month is reused as the total counter.)
+ * doesn't exist yet. New users start with STARTING_CREDITS.
  *
  * @param clerkUserId — must come from `await auth()`, never from request input
  */
@@ -48,7 +52,7 @@ export async function getOrCreateUser(
       clerk_user_id: clerkUserId,
       email: email ?? null,
       tier: "free",
-      generations_used_this_month: 0,
+      credits: STARTING_CREDITS,
     })
     .select()
     .single<UserRecord>();
@@ -60,43 +64,53 @@ export async function getOrCreateUser(
 }
 
 /**
- * Demo limit check: 3 generations total per user, lifetime.
+ * Credit check for a generation costing `cost` credits.
  *
- * Exception: users flagged `is_unlimited` in the DB bypass the limit entirely.
- * This flag lives server-side and is read here, so it cannot be forged by the
- * client — the generate route calls this before allowing any generation.
+ * Exception: users flagged `is_unlimited` in the DB are exempt — always allowed
+ * and never charged. This flag lives server-side and is read here, so it cannot
+ * be forged by the client; the generate route calls this before generating.
  */
-export function checkGenerationLimit(user: UserRecord): {
+export function checkCredits(
+  user: UserRecord,
+  cost: number
+): {
   allowed: boolean;
-  used: number;
-  limit: number;
+  credits: number;
   unlimited: boolean;
+  /** How many credits short (0 when allowed). */
+  missing: number;
 } {
-  const used = user.generations_used_this_month ?? 0;
-  const limit = DEMO_GENERATION_LIMIT;
   const unlimited = user.is_unlimited === true;
-  return { allowed: unlimited || used < limit, used, limit, unlimited };
+  const credits = user.credits ?? 0;
+  const allowed = unlimited || credits >= cost;
+  return { allowed, credits, unlimited, missing: allowed ? 0 : cost - credits };
 }
 
 /**
- * Atomically increments the monthly generation counter for a user.
+ * Deducts `cost` credits from a user, clamped at 0.
+ *
+ * Read-then-write (optimistic) — matches this app's single-user, rate-limited
+ * usage. Concurrent requests are already throttled to 5/min by the burst limiter,
+ * so a lost-update race is not a practical concern here.
  *
  * @param userId — internal UUID from `users.id`, derived from a verified UserRecord
- * @param currentCount — the count that was read when the limit check happened
+ * @param currentCredits — balance read during the credit check
+ * @returns the new balance
  */
-export async function incrementGenerationCount(
+export async function deductCredits(
   userId: string,
-  currentCount: number
-): Promise<void> {
+  currentCredits: number,
+  cost: number
+): Promise<number> {
   const supabase = getSupabase();
-  await supabase
-    .from("users")
-    .update({ generations_used_this_month: currentCount + 1 })
-    .eq("id", userId);
+  const next = Math.max(0, currentCredits - cost);
+  await supabase.from("users").update({ credits: next }).eq("id", userId);
+  return next;
 }
 
 /**
- * Saves a completed generation to the database.
+ * Saves a generation (image first). Listing fields default to null and are
+ * filled in later by updateGenerationListing() only if the user opts in.
  *
  * @param userId — internal UUID from `users.id`, derived from a verified UserRecord
  */
@@ -110,15 +124,63 @@ export async function saveGeneration(
     .insert({
       user_id: userId,
       image_url: data.imageUrl,
-      listing_title: data.listingTitle,
-      listing_description: data.listingDescription,
+      listing_title: data.listingTitle ?? null,
+      listing_description: data.listingDescription ?? null,
       model_used: data.modelUsed,
+      ai_model: data.aiModel,
+      resolution: data.resolution,
       language: data.language,
     })
     .select()
     .single<GenerationRecord>();
 
   return row;
+}
+
+/**
+ * Loads one generation, scoped to its owner. Returns null if it doesn't exist
+ * or belongs to someone else — this is the ownership gate for the listing route.
+ *
+ * @param userId — internal UUID from `users.id`, derived from a verified UserRecord
+ */
+export async function getGeneration(
+  userId: string,
+  generationId: string
+): Promise<GenerationRecord | null> {
+  const supabase = getSupabase();
+  const { data } = await supabase
+    .from("generations")
+    .select("*")
+    .eq("id", generationId)
+    .eq("user_id", userId)
+    .single<GenerationRecord>();
+
+  return data ?? null;
+}
+
+/**
+ * Fills in the listing text for an existing generation. Scoped to the owner via
+ * both id and user_id so a forged id can't overwrite someone else's row.
+ *
+ * @param userId — internal UUID from `users.id`, derived from a verified UserRecord
+ */
+export async function updateGenerationListing(
+  userId: string,
+  generationId: string,
+  title: string,
+  description: string,
+  language: "de" | "en"
+): Promise<void> {
+  const supabase = getSupabase();
+  await supabase
+    .from("generations")
+    .update({
+      listing_title: title,
+      listing_description: description,
+      language,
+    })
+    .eq("id", generationId)
+    .eq("user_id", userId);
 }
 
 /**

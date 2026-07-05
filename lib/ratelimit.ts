@@ -1,8 +1,8 @@
 /**
  * Burst protector for /api/generate.
  *
- * INDEPENDENT of the lifetime demo limit (DEMO_GENERATION_LIMIT) and the
- * `is_unlimited` flag. Its only job is to stop rapid-fire duplicate/buggy
+ * INDEPENDENT of the credit balance and the `is_unlimited` flag. Its only job
+ * is to stop rapid-fire duplicate/buggy
  * requests (e.g. a double-submit or a runaway loop) — 5 requests per minute
  * per Clerk user, sliding window. It does NOT change how many generations a
  * user is allowed in total; the lifetime check runs separately after this.

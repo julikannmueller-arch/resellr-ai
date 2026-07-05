@@ -15,14 +15,15 @@ Persistent context for AI coding sessions. Terse, decision-oriented. Not human d
 - **Clerk** `@clerk/nextjs@^6.39.5` — auth. **Pinned to v6 on purpose** (v7 requires Next 15+; caused Vercel ERESOLVE fail). Every API used exists in v6.
 - **Supabase** `@supabase/supabase-js@2` — Postgres (users + generations). Service-role key, server-side only.
 - **OpenAI** `openai@6`, model **`gpt-4o-mini`** (vision) — listing text generation.
-- **PiAPI** (`api.piapi.ai`), model `gemini` / task_type **`nano-banana-pro`** — virtual try-on. Env: `PIAPI_KEY`.
+- **PiAPI** (`api.piapi.ai`), model `gemini`, task_type **selectable** (`nano-banana-pro` | `nano-banana-2`) — virtual try-on. Same `resolution` field for both: `"1K"` (standard) | `"4K"`. Chosen in UI, mapped by `lib/pricing.ts` `piapiParams()`. Env: `PIAPI_KEY`. Response image at `data.output.image_urls[0]`.
 - **litterbox.catbox.moe** — temp image host (1h TTL) to hand PiAPI public URLs (base64 → URL).
 - Manrope font via `next/font` (`--font-manrope`).
 
 ## Architecture
 - `app/page.tsx` — tab state (`generator` | `history` | `sniper`), desktop nav + mobile BottomNav.
 - `app/layout.tsx` — `<ClerkProvider>` inside `<body>` (NOT wrapping `<html>`), Manrope, dark bg.
-- `app/api/generate/route.ts` — **core orchestrator**. auth → **burst rate limit** → getOrCreateUser → limit check → resolve model → `Promise.all([generateTryOn, generateListing])` → increment + saveGeneration. maxDuration 120.
+- `app/api/generate/route.ts` — **image only**. auth → **burst rate limit** → getOrCreateUser → parse body (incl. `model`, `is4k`) → **credit check** (`checkCredits`) → resolve model image → `generateTryOn(…piapiParams)` → **deductCredits** + saveGeneration (listing cols null) → returns `{tryOnUrl, generationId, credits}`. maxDuration 120. **Listing is decoupled** — NOT generated here.
+- `app/api/generate/listing/route.ts` — **on-demand listing text** (GPT-4o-mini). auth → burst rate limit (`${userId}:listing` window) → verify generation ownership (`getGeneration`) → **idempotent** (returns existing listing without a GPT call) → `generateListing` → `updateGenerationListing` on the SAME row → returns `{listing}`. **Costs NO credits** (image already paid). Body: `{generationId, garmentImage, listingLang}`.
 - `lib/ratelimit.ts` — Upstash burst limiter, 5 req/min/user (sliding window), keyed by Clerk userId. Independent of the lifetime limit & `is_unlimited` — pure anti-burst. Lazy singleton, **fail-open** if `UPSTASH_REDIS_REST_URL`/`_TOKEN` unset (logs a warning, skips limiting). Test: `node scripts/test-ratelimit.mjs`.
 - `app/api/user/status/route.ts` — returns `{ used, limit }`. Falls back to safe defaults if Supabase unconfigured (never crashes UI).
 - `app/api/user/generations/route.ts` — history list for logged-in user.
@@ -48,8 +49,8 @@ Persistent context for AI coding sessions. Terse, decision-oriented. Not human d
 - **Streetrunner minigame** during generation wait — opt-in prompt ("Play"), fullscreen canvas runner, pauses on result-ready with Continue/Exit. Pure canvas (no assets). Highscore in localStorage.
 
 ## Current limitations / deliberate constraints
-- **3 generations per user, LIFETIME** (demo). `DEMO_GENERATION_LIMIT` in `lib/supabase.ts`. Reuses `generations_used_this_month` col as total counter (no monthly reset anymore).
-- **`users.is_unlimited` bypass** — accounts flagged `is_unlimited=true` skip the limit entirely (owner: julikannmueller@gmail.com, clerk id `user_3FxJ53EfGzLywNyfEhkRlL1jxCk`). Enforced server-side in `checkGenerationLimit()`; `/api/user/status` returns `unlimited` so the UI shows an ∞ badge instead of a counter. Unlimited users don't increment the counter. Migration: `supabase/migrations/001_add_is_unlimited.sql` (flags by clerk_user_id — see email gotcha).
+- **Credit system** (replaced the old 3-gen lifetime limit). `users.credits` (int, default 30). Price matrix in `lib/pricing.ts` (single source of truth, shared client+server): Nano Banana Pro=10 / +4K=15, Nano Banana 2=5 / +4K=10 (4K is a flat +5). Server derives cost from (model, is4k) — never trusts the client price. `checkCredits()` gates, `deductCredits()` charges after success. Migration: `supabase/migrations/002_credits_system.sql`.
+- **`users.is_unlimited` bypass** — accounts flagged `is_unlimited=true` are exempt from credit deduction entirely (owner: julikannmueller@gmail.com, clerk id `user_3FxJ53EfGzLywNyfEhkRlL1jxCk`). Enforced server-side in `checkCredits()`; `/api/user/status` returns `{credits, unlimited}` so the UI shows an ∞ badge instead of the balance. Migration: `supabase/migrations/001_add_is_unlimited.sql` (flags by clerk_user_id — see email gotcha).
 - **Rate-limit 429 → UI cooldown** — GeneratorView reads `Retry-After`, runs a per-second countdown (`cooldown` state + `t.rateLimited`), disables the Generate button, auto-re-enables at 0.
 - **Stripe/payments removed** for demo — no checkout/pricing/tiers. Code lives in git history if needed back. `tier`/`stripe_*` DB columns exist but unused.
 - **Clerk = DEV instance keys** (`pk_test_`/`sk_test_`) in production. Deliberate: `*.vercel.app` CANNOT host a Clerk production instance (can't set required DNS/CNAME on Vercel-owned domain). Prod instance needs a real custom domain first. Dev keys work on any domain (shows small Clerk dev banner).

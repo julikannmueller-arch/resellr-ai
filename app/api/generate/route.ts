@@ -3,14 +3,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { generateTryOn } from "@/lib/tryon";
-import { generateListing } from "@/lib/openai";
 import {
   getOrCreateUser,
-  checkGenerationLimit,
-  incrementGenerationCount,
+  checkCredits,
+  deductCredits,
   saveGeneration,
 } from "@/lib/supabase-helpers";
 import { checkRateLimit } from "@/lib/ratelimit";
+import { creditCost, piapiParams, isTryOnModel, type TryOnModel } from "@/lib/pricing";
 
 export const maxDuration = 120;
 
@@ -57,33 +57,24 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── 3. Enforce demo limit: 3 generations total per user ────────────────────
-  //    Server-side gate. Users flagged `is_unlimited` in the DB skip the limit
-  //    (checkGenerationLimit returns allowed=true for them). This check lives
-  //    here in the API route — the client cannot bypass it.
-  const { allowed, used, limit, unlimited } = checkGenerationLimit(user);
-  if (!allowed) {
-    return NextResponse.json(
-      {
-        error: `You've used all ${limit} free generations for this demo. Thanks for trying Resellr AI!`,
-        code: "LIMIT_REACHED",
-        used,
-        limit,
-      },
-      { status: 403 }
-    );
-  }
-
-  // ── 4. Parse and validate request body ─────────────────────────────────────
+  // ── 3. Parse and validate request body ─────────────────────────────────────
   let garmentImages: string[];
   let modelImage: string;
   let listingLang: "de" | "en";
+  let model: TryOnModel;
+  let is4k: boolean;
 
   try {
     const body = await request.json();
     garmentImages = body.garmentImages;
     modelImage = body.modelImage;
     listingLang = body.listingLang === "en" ? "en" : "de";
+    // Model + resolution drive the price — validate strictly so we never mischarge.
+    if (!isTryOnModel(body.model)) {
+      return NextResponse.json({ error: "Invalid model selection" }, { status: 400 });
+    }
+    model = body.model;
+    is4k = body.is4k === true;
   } catch {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
@@ -93,6 +84,26 @@ export async function POST(request: NextRequest) {
   }
   if (typeof modelImage !== "string" || modelImage.trim() === "") {
     return NextResponse.json({ error: "No model selected" }, { status: 400 });
+  }
+
+  // ── 4. Enforce credits ──────────────────────────────────────────────────────
+  //    Cost is derived server-side from (model, 4K) — the client-sent price is
+  //    never trusted. Users flagged `is_unlimited` are exempt (checkCredits
+  //    returns allowed=true and is never charged). This gate lives here in the
+  //    API route so the client cannot bypass it.
+  const cost = creditCost({ model, is4k });
+  const { allowed, credits, unlimited, missing } = checkCredits(user, cost);
+  if (!allowed) {
+    return NextResponse.json(
+      {
+        error: `Not enough credits: this generation costs ${cost}, you have ${credits} (${missing} short).`,
+        code: "INSUFFICIENT_CREDITS",
+        cost,
+        credits,
+        missing,
+      },
+      { status: 402 }
+    );
   }
 
   // ── 5. Resolve preset model to base64 ───────────────────────────────────────
@@ -112,36 +123,41 @@ export async function POST(request: NextRequest) {
     resolvedModelImage = modelImage;
   }
 
-  // ── 6. Run try-on + listing generation ─────────────────────────────────────
+  // ── 6. Run try-on ONLY ──────────────────────────────────────────────────────
+  //    The listing (GPT-4o-mini) is decoupled: generated on demand later via
+  //    /api/generate/listing, so a user who only wants the image pays no GPT cost.
   try {
     const garmentImage = garmentImages[0];
-    const [tryOnUrl, listing] = await Promise.all([
-      generateTryOn(resolvedModelImage, garmentImage),
-      generateListing(garmentImage, listingLang),
-    ]);
+    const tryOnUrl = await generateTryOn(
+      resolvedModelImage,
+      garmentImage,
+      piapiParams({ model, is4k })
+    );
 
-    // ── 7. Persist to DB — errors here are logged but never surface to the user
-    //    (the generation already succeeded; we don't want to discard the result)
+    // ── 7. Charge credits + persist the generation (listing fields stay null).
+    //    We need the saved row id so the client can request the listing later;
+    //    a DB error is non-fatal for the result but then no listing is possible.
+    let remainingCredits = credits;
+    let generationId: string | null = null;
     try {
-      await Promise.all([
-        // Unlimited users don't consume the demo counter — keep it stable.
-        unlimited
-          ? Promise.resolve()
-          : incrementGenerationCount(user.id, used),
+      const [deducted, saved] = await Promise.all([
+        unlimited ? Promise.resolve(credits) : deductCredits(user.id, credits, cost),
         saveGeneration(user.id, {
           imageUrl: tryOnUrl,
-          listingTitle: listing.title,
-          listingDescription: listing.description,
           modelUsed: modelImage,
+          aiModel: model,
+          resolution: is4k ? "4K" : "1K",
           language: listingLang,
         }),
       ]);
+      remainingCredits = deducted;
+      generationId = saved?.id ?? null;
     } catch (dbErr) {
-      // Non-fatal: generation succeeded, DB save failed — log and continue
-      console.error("[/api/generate] DB save failed (non-fatal):", dbErr);
+      // Non-fatal: generation succeeded, DB write failed — log and continue.
+      console.error("[/api/generate] DB write failed (non-fatal):", dbErr);
     }
 
-    return NextResponse.json({ tryOnUrl, listing });
+    return NextResponse.json({ tryOnUrl, generationId, credits: remainingCredits, unlimited });
   } catch (err) {
     console.error("[/api/generate]", err);
     const message = err instanceof Error ? err.message : "Unknown error occurred";

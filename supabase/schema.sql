@@ -17,9 +17,11 @@ create table if not exists public.users (
                                           check (tier in ('free', 'pro', 'unlimited')),
   stripe_customer_id          text,
   stripe_subscription_id      text,
-  generations_used_this_month int         not null default 0,
+  generations_used_this_month int         not null default 0,  -- legacy, unused
   generations_reset_at        timestamptz,
-  -- Owner/comp accounts: bypass DEMO_GENERATION_LIMIT entirely.
+  -- Credit balance. Each try-on costs credits per lib/pricing.ts. New users: 30.
+  credits                     integer     not null default 30,
+  -- Owner/comp accounts: exempt from credit deduction entirely.
   is_unlimited                boolean     not null default false,
   created_at                  timestamptz not null default now()
 );
@@ -35,9 +37,12 @@ create table if not exists public.generations (
   id                   uuid        primary key default gen_random_uuid(),
   user_id              uuid        not null references public.users(id) on delete cascade,
   image_url            text,
+  -- Listing is optional (generated on demand) — stays null if the user skips it.
   listing_title        text,
   listing_description  text,
-  model_used           text,
+  model_used           text,       -- model photo reference (preset id or base64)
+  ai_model             text,       -- chosen AI model: "pro" | "nb2"
+  resolution           text,       -- chosen resolution: "1K" | "4K"
   language             text        not null default 'de',
   created_at           timestamptz not null default now()
 );

@@ -11,7 +11,9 @@ export interface UserRecord {
   stripe_subscription_id: string | null;
   generations_used_this_month: number;
   generations_reset_at: string | null;
-  // When true, this user bypasses DEMO_GENERATION_LIMIT entirely (owner/comp accounts).
+  // Credit balance. Each try-on costs credits per lib/pricing.ts. New users start at 30.
+  credits: number;
+  // When true, this user is exempt from credit deduction entirely (owner/comp accounts).
   is_unlimited: boolean;
   created_at: string;
 }
@@ -23,13 +25,16 @@ export interface GenerationRecord {
   listing_title: string | null;
   listing_description: string | null;
   model_used: string | null;
+  // Chosen AI model ("pro" | "nb2") and resolution ("1K" | "4K").
+  ai_model: string | null;
+  resolution: string | null;
   language: string;
   created_at: string;
 }
 
-// Demo phase: every user gets 3 generations total (lifetime, no reset).
-// The tier column still exists in the DB but is unused for now.
-export const DEMO_GENERATION_LIMIT = 3;
+// Access is governed by the credit balance (users.credits) — see lib/pricing.ts.
+// The old 3-generation lifetime limit has been removed. The `tier` and
+// `generations_used_this_month` columns still exist in the DB but are unused.
 
 let _client: SupabaseClient | null = null;
 

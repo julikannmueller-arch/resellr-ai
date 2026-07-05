@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { getOrCreateUser, checkGenerationLimit } from "@/lib/supabase-helpers";
-import { DEMO_GENERATION_LIMIT } from "@/lib/supabase";
+import { getOrCreateUser } from "@/lib/supabase-helpers";
+import { STARTING_CREDITS } from "@/lib/pricing";
 
 export async function GET() {
   const { userId } = await auth();
@@ -11,14 +11,16 @@ export async function GET() {
 
   try {
     const user = await getOrCreateUser(userId);
-    const { used, limit, unlimited } = checkGenerationLimit(user);
-    return NextResponse.json({ used, limit, unlimited });
+    return NextResponse.json({
+      credits: user.credits ?? 0,
+      unlimited: user.is_unlimited === true,
+    });
   } catch (err) {
     // Supabase not configured yet — return safe defaults so the UI doesn't break
     const msg = err instanceof Error ? err.message : "Database error";
     console.error("[/api/user/status]", msg);
     return NextResponse.json(
-      { used: 0, limit: DEMO_GENERATION_LIMIT, dbError: true },
+      { credits: STARTING_CREDITS, unlimited: false, dbError: true },
       { status: 200 }
     );
   }
