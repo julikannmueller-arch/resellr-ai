@@ -10,6 +10,7 @@ import {
   incrementGenerationCount,
   saveGeneration,
 } from "@/lib/supabase-helpers";
+import { checkRateLimit } from "@/lib/ratelimit";
 
 export const maxDuration = 120;
 
@@ -20,6 +21,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "Please sign in to generate", code: "UNAUTHENTICATED" },
       { status: 401 }
+    );
+  }
+
+  // ── 1b. Burst rate limit: 5 req/min per user ────────────────────────────────
+  //    Independent of the lifetime limit and the is_unlimited flag — this only
+  //    guards against rapid-fire duplicate/buggy requests. Keyed by Clerk userId
+  //    (per-account, not per-IP). Runs before the lifetime/unlimited checks.
+  const rl = await checkRateLimit(userId);
+  if (!rl.success) {
+    const retryAfter = Math.max(1, Math.ceil((rl.reset - Date.now()) / 1000));
+    return NextResponse.json(
+      {
+        error: "Zu viele Anfragen, bitte kurz warten.",
+        code: "RATE_LIMITED",
+        retryAfter,
+      },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
     );
   }
 
@@ -40,7 +58,10 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 3. Enforce demo limit: 3 generations total per user ────────────────────
-  const { allowed, used, limit } = checkGenerationLimit(user);
+  //    Server-side gate. Users flagged `is_unlimited` in the DB skip the limit
+  //    (checkGenerationLimit returns allowed=true for them). This check lives
+  //    here in the API route — the client cannot bypass it.
+  const { allowed, used, limit, unlimited } = checkGenerationLimit(user);
   if (!allowed) {
     return NextResponse.json(
       {
@@ -103,7 +124,10 @@ export async function POST(request: NextRequest) {
     //    (the generation already succeeded; we don't want to discard the result)
     try {
       await Promise.all([
-        incrementGenerationCount(user.id, used),
+        // Unlimited users don't consume the demo counter — keep it stable.
+        unlimited
+          ? Promise.resolve()
+          : incrementGenerationCount(user.id, used),
         saveGeneration(user.id, {
           imageUrl: tryOnUrl,
           listingTitle: listing.title,

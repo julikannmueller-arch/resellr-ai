@@ -11,6 +11,8 @@ export interface UserRecord {
   stripe_subscription_id: string | null;
   generations_used_this_month: number;
   generations_reset_at: string | null;
+  // When true, this user bypasses DEMO_GENERATION_LIMIT entirely (owner/comp accounts).
+  is_unlimited: boolean;
   created_at: string;
 }
 

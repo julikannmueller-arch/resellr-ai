@@ -25,6 +25,7 @@ interface Results {
 interface UserStatus {
   used: number;
   limit: number;
+  unlimited?: boolean;
 }
 
 interface GeneratorViewProps {
@@ -44,6 +45,8 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [listingLang, setListingLang] = useState<Lang>("de");
   const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
+  // Seconds left on the burst rate-limit cooldown (from a 429 Retry-After). 0 = clear.
+  const [cooldown, setCooldown] = useState(0);
   // Game is opt-in: a prompt shows while generating; the game opens on "Play"
   const [gameOpen, setGameOpen] = useState(false);
   const [gameResultReady, setGameResultReady] = useState(false);
@@ -55,6 +58,14 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
       document.body.style.overflow = "";
     };
   }, [gameOpen]);
+
+  // Rate-limit cooldown ticker: counts the 429 Retry-After down to 0, then the
+  // button re-enables automatically (isButtonDisabled reads cooldown).
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const id = setTimeout(() => setCooldown((s) => Math.max(0, s - 1)), 1000);
+    return () => clearTimeout(id);
+  }, [cooldown]);
 
   // Pre-decode the try-on image so "Exit" reveals the result with zero delay
   const preloadImage = (url: string) =>
@@ -100,14 +111,17 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
     images.length > 0 &&
     (modelType !== "custom" || customModelImage !== null);
 
+  const isUnlimited = userStatus?.unlimited === true;
   const generationsLeft = userStatus
     ? Math.max(0, userStatus.limit - userStatus.used)
     : null;
-  const limitReached = generationsLeft === 0;
+  // Unlimited users never hit the limit — keep the button enabled regardless.
+  const limitReached = !isUnlimited && generationsLeft === 0;
 
-  // Disabled when signed in but content missing, or the demo limit is used up
+  // Disabled when signed in but content missing, the demo limit is used up, or
+  // a burst-rate-limit cooldown is running.
   const isButtonDisabled =
-    isLoaded && !!isSignedIn && (!canGenerate || limitReached);
+    isLoaded && !!isSignedIn && (!canGenerate || limitReached || cooldown > 0);
 
   const handleGenerate = async () => {
     // Not signed in → open Clerk sign-in modal
@@ -116,7 +130,7 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
       return;
     }
 
-    if (!canGenerate || isLoading || limitReached) return;
+    if (!canGenerate || isLoading || limitReached || cooldown > 0) return;
 
     setIsLoading(true);
     setError(null);
@@ -143,6 +157,20 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
         if (data.code === "LIMIT_REACHED") {
           // Sync the counter — the limit banner renders from userStatus
           setUserStatus({ used: data.used, limit: data.limit });
+          setGameOpen(false);
+          return;
+        }
+        if (response.status === 429 || data.code === "RATE_LIMITED") {
+          // Burst limit hit — start the cooldown from the Retry-After header
+          // (fall back to the body value, then a sane default).
+          const header = Number(response.headers.get("Retry-After"));
+          const secs =
+            Number.isFinite(header) && header > 0
+              ? header
+              : typeof data.retryAfter === "number"
+              ? data.retryAfter
+              : 30;
+          setCooldown(secs);
           setGameOpen(false);
           return;
         }
@@ -212,8 +240,32 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
           isLoading={isLoading}
         />
 
+        {/* Burst rate-limit cooldown — button re-enables when this hits 0 */}
+        {isLoaded && isSignedIn && cooldown > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex items-center justify-center mt-2.5 px-1"
+          >
+            <span className="text-xs font-bold text-yellow-400">
+              {t.rateLimited.replace("{n}", String(cooldown))}
+            </span>
+          </motion.div>
+        )}
+
+        {/* Unlimited badge — shown for owner/comp accounts instead of a counter */}
+        {isLoaded && isSignedIn && isUnlimited && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex items-center justify-center mt-2.5 px-1"
+          >
+            <span className="text-xs font-bold text-green">{t.genUnlimited}</span>
+          </motion.div>
+        )}
+
         {/* Remaining generations counter */}
-        {isLoaded && isSignedIn && userStatus && !limitReached && (
+        {isLoaded && isSignedIn && userStatus && !isUnlimited && !limitReached && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

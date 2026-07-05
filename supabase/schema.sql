@@ -19,6 +19,8 @@ create table if not exists public.users (
   stripe_subscription_id      text,
   generations_used_this_month int         not null default 0,
   generations_reset_at        timestamptz,
+  -- Owner/comp accounts: bypass DEMO_GENERATION_LIMIT entirely.
+  is_unlimited                boolean     not null default false,
   created_at                  timestamptz not null default now()
 );
 

@@ -11,8 +11,8 @@ export async function GET() {
 
   try {
     const user = await getOrCreateUser(userId);
-    const { used, limit } = checkGenerationLimit(user);
-    return NextResponse.json({ used, limit });
+    const { used, limit, unlimited } = checkGenerationLimit(user);
+    return NextResponse.json({ used, limit, unlimited });
   } catch (err) {
     // Supabase not configured yet — return safe defaults so the UI doesn't break
     const msg = err instanceof Error ? err.message : "Database error";

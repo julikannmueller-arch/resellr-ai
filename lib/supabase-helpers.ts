@@ -61,15 +61,21 @@ export async function getOrCreateUser(
 
 /**
  * Demo limit check: 3 generations total per user, lifetime.
+ *
+ * Exception: users flagged `is_unlimited` in the DB bypass the limit entirely.
+ * This flag lives server-side and is read here, so it cannot be forged by the
+ * client — the generate route calls this before allowing any generation.
  */
 export function checkGenerationLimit(user: UserRecord): {
   allowed: boolean;
   used: number;
   limit: number;
+  unlimited: boolean;
 } {
   const used = user.generations_used_this_month ?? 0;
   const limit = DEMO_GENERATION_LIMIT;
-  return { allowed: used < limit, used, limit };
+  const unlimited = user.is_unlimited === true;
+  return { allowed: unlimited || used < limit, used, limit, unlimited };
 }
 
 /**
