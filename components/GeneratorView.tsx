@@ -214,9 +214,7 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
       await preloadImage(data.tryOnUrl);
       setGameResultReady(true);
     } catch (err) {
-      // Temporary: include the error type so an iPhone screenshot tells us the
-      // exact DOMException (e.g. SyntaxError vs TypeError) for diagnosis.
-      setError(err instanceof Error ? `${err.name}: ${err.message}` : "Unknown error occurred");
+      setError(err instanceof Error ? err.message : "Unknown error occurred");
       setGameOpen(false); // close the game so the error is visible
     } finally {
       setIsLoading(false);
@@ -247,9 +245,7 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
       }
       setResults((r) => (r ? { ...r, listing: data.listing } : r));
     } catch (err) {
-      // Temporary: include the error type so an iPhone screenshot tells us the
-      // exact DOMException (e.g. SyntaxError vs TypeError) for diagnosis.
-      setError(err instanceof Error ? `${err.name}: ${err.message}` : "Unknown error occurred");
+      setError(err instanceof Error ? err.message : "Unknown error occurred");
     } finally {
       setListingLoading(false);
     }

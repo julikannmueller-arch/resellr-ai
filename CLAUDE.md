@@ -79,6 +79,7 @@ Persistent context for AI coding sessions. Terse, decision-oriented. Not human d
 - **Secrets for CLIs** always live in `.env.local` (gitignored via `.env*.local`), never pasted into chat. Load per-command when needed (Bash doesn't auto-source `.env.local`).
 
 ## Gotchas / watch out
+- **Uploads are downscaled client-side** (`lib/image.ts`, in UploadZone + ModelPicker) — canvas → JPEG q0.85, longest side ≤1600px. Reason: iPhone photos (3–12 MB, often HEIC) sent raw exceed **Vercel's ~4.5 MB serverless body limit** and fail on iOS Safari with a cryptic "string did not match the expected pattern" DOMException. Localhost has no such limit → the bug is prod/iOS-only. Keep uploads small; don't send raw camera images to `/api/generate`.
 - **NEVER run `npm run build` while `next dev` is running** — both write `.next/`, corrupts dev asset serving (404s on CSS/JS). Verify with `tsc --noEmit` instead; only build when dev is stopped.
 - **Secrets**: `.env.local` gitignored via `.env*.local`. Never commit/print secret keys. `SUPABASE_SERVICE_ROLE_KEY`, `CLERK_SECRET_KEY`, `OPENAI_API_KEY`, `PIAPI_KEY` are secret; `NEXT_PUBLIC_*` are public by design.
 - **Supabase env var** is `NEXT_PUBLIC_SUPABASE_URL` — must be bare origin, NO `/rest/v1/` suffix (client appends it; suffix → double path 404).
