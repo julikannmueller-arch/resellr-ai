@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLang } from "@/contexts/LangContext";
+import { downscaleImage } from "@/lib/image";
 
 export type ModelType = string; // "model-01" … "model-12" | "custom"
 
@@ -33,11 +34,18 @@ export default function ModelPicker({
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      if (ev.target?.result) {
-        onCustomImageChange(ev.target.result as string);
-        onChange("custom");
+    reader.onload = async (ev) => {
+      const raw = ev.target?.result as string | undefined;
+      if (!raw) return;
+      // Normalize + shrink (iPhone HEIC / huge photos) before uploading.
+      let img = raw;
+      try {
+        img = await downscaleImage(raw);
+      } catch {
+        /* keep original on failure */
       }
+      onCustomImageChange(img);
+      onChange("custom");
     };
     reader.readAsDataURL(file);
     e.target.value = "";
@@ -198,7 +206,7 @@ export default function ModelPicker({
       <input
         ref={inputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
         className="hidden"
         onChange={handleCustomUpload}
       />

@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useLang } from "@/contexts/LangContext";
+import { downscaleImage } from "@/lib/image";
 
 interface UploadZoneProps {
   images: string[];
@@ -20,25 +21,40 @@ export default function UploadZone({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const processFiles = useCallback(
-    (files: FileList | File[]) => {
+    async (files: FileList | File[]) => {
+      // Accept any image (incl. iPhone HEIC, or empty type on some browsers) —
+      // downscaleImage normalizes everything to a web-safe, size-capped JPEG.
       const fileArray = Array.from(files).filter(
-        (f) =>
-          f.type === "image/jpeg" ||
-          f.type === "image/png" ||
-          f.type === "image/webp"
+        (f) => f.type.startsWith("image/") || f.type === ""
       );
       const remaining = maxImages - images.length;
       const toProcess = fileArray.slice(0, remaining);
+      if (toProcess.length === 0) return;
 
-      toProcess.forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          if (e.target?.result) {
-            onChange([...images, e.target.result as string]);
-          }
-        };
-        reader.readAsDataURL(file);
-      });
+      // Read + compress all picked files, then update state once (fixes the
+      // stale-closure bug where multiple files clobbered each other).
+      const results = await Promise.all(
+        toProcess.map(
+          (file) =>
+            new Promise<string | null>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = async (e) => {
+                const raw = e.target?.result as string | undefined;
+                if (!raw) return resolve(null);
+                try {
+                  resolve(await downscaleImage(raw));
+                } catch {
+                  resolve(raw);
+                }
+              };
+              reader.onerror = () => resolve(null);
+              reader.readAsDataURL(file);
+            })
+        )
+      );
+
+      const added = results.filter((u): u is string => u !== null);
+      if (added.length) onChange([...images, ...added]);
     },
     [images, maxImages, onChange]
   );
@@ -147,7 +163,7 @@ export default function UploadZone({
       <input
         ref={inputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
         multiple
         className="hidden"
         onChange={handleFileChange}
