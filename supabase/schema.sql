@@ -19,8 +19,8 @@ create table if not exists public.users (
   stripe_subscription_id      text,
   generations_used_this_month int         not null default 0,  -- legacy, unused
   generations_reset_at        timestamptz,
-  -- Credit balance. Each try-on costs credits per lib/pricing.ts. New users: 30.
-  credits                     integer     not null default 30,
+  -- Credit balance. Each try-on costs credits per lib/pricing.ts. New users: 10.
+  credits                     integer     not null default 10,
   -- Owner/comp accounts: exempt from credit deduction entirely.
   is_unlimited                boolean     not null default false,
   created_at                  timestamptz not null default now()

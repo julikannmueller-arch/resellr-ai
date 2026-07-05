@@ -16,7 +16,7 @@ export interface PricingInput {
 }
 
 /** Credits a brand-new user starts with (must match the DB column default). */
-export const STARTING_CREDITS = 30;
+export const STARTING_CREDITS = 10;
 
 /** Base cost per model at standard resolution. */
 const BASE_COST: Record<TryOnModel, number> = {
