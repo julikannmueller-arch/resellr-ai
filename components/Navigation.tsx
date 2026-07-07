@@ -20,7 +20,7 @@ const TABS: { id: Tab; label: string; pro?: boolean }[] = [
 ];
 
 export default function Navigation({ activeTab, onTabChange }: NavigationProps) {
-  const { uiLang, setUiLang } = useLang();
+  const { uiLang, setUiLang, t } = useLang();
   const { isSignedIn, isLoaded } = useUser();
 
   return (
@@ -69,6 +69,16 @@ export default function Navigation({ activeTab, onTabChange }: NavigationProps) 
 
           {/* UI language toggle */}
           <LangToggle value={uiLang} onChange={setUiLang} />
+
+          {/* Buy credits — visible for every signed-in user (incl. unlimited) */}
+          {isLoaded && isSignedIn && (
+            <Link
+              href="/pricing"
+              className="text-xs font-extrabold text-bg bg-green rounded-pill px-3 py-1.5 hover:bg-green/90 transition-colors whitespace-nowrap"
+            >
+              {t.buyCredits}
+            </Link>
+          )}
 
           {/* Auth — conditional on load state */}
           {isLoaded && !isSignedIn && (
