@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Manrope } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { LangProvider } from "@/contexts/LangContext";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -24,7 +25,7 @@ export default function RootLayout({
     <html lang="de" className={manrope.variable}>
       <body className="font-sans bg-bg text-text-primary antialiased">
         <ClerkProvider>
-          {children}
+          <LangProvider>{children}</LangProvider>
         </ClerkProvider>
       </body>
     </html>

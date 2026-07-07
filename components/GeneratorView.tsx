@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useUser, useClerk } from "@clerk/nextjs";
 import { useLang } from "@/contexts/LangContext";
@@ -57,6 +58,8 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
   const [cooldown, setCooldown] = useState(0);
   // Spinner state for the optional on-demand listing generation.
   const [listingLoading, setListingLoading] = useState(false);
+  // Shown after returning from a successful Stripe checkout.
+  const [checkoutMsg, setCheckoutMsg] = useState<string | null>(null);
   // Game is opt-in: a prompt shows while generating; the game opens on "Play"
   const [gameOpen, setGameOpen] = useState(false);
   const [gameResultReady, setGameResultReady] = useState(false);
@@ -101,6 +104,27 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
       setGameOpen(false);
     }
   };
+
+  // Returning from Stripe Checkout (?checkout=success): show a note and poll the
+  // balance for a few seconds while the webhook grants the credits.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("checkout") !== "success") return;
+    setCheckoutMsg(t.checkoutSuccess);
+    window.history.replaceState({}, "", window.location.pathname);
+    let tries = 0;
+    const id = setInterval(() => {
+      tries++;
+      fetch("/api/user/status")
+        .then((r) => r.json())
+        .then((d) => { if (!d.error) setUserStatus(d); })
+        .catch(() => null);
+      if (tries >= 5) clearInterval(id);
+    }, 2000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch user's generation status whenever they sign in
   useEffect(() => {
@@ -260,6 +284,20 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
         <p className="text-text-secondary text-sm mt-2">{t.hero}</p>
       </div>
 
+      {/* Stripe checkout success */}
+      <AnimatePresence>
+        {checkoutMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="bg-green/10 border border-green/30 rounded-card p-3 text-green text-sm text-center font-bold"
+          >
+            {checkoutMsg}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div>
         <SectionLabel label={t.s01} />
         <UploadZone images={images} onChange={setImages} />
@@ -383,6 +421,18 @@ export default function GeneratorView({ onLoadingChange }: GeneratorViewProps) {
               {t.creditsAvailable.replace("{n}", String(credits))}
             </span>
           </motion.div>
+        )}
+
+        {/* Buy credits entry */}
+        {isLoaded && isSignedIn && !isUnlimited && (
+          <div className="flex items-center justify-center mt-1.5">
+            <Link
+              href="/pricing"
+              className="text-xs font-bold text-text-muted hover:text-green underline underline-offset-2 transition-colors"
+            >
+              {t.buyCredits}
+            </Link>
+          </div>
         )}
 
         {/* Not signed in hint */}

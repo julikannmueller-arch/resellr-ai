@@ -138,6 +138,77 @@ export async function saveGeneration(
 }
 
 /**
+ * Atomically adds `amount` credits to a user (Postgres increment_credits fn) —
+ * safe against concurrent webhook grants. Returns the new balance.
+ *
+ * @param userId — internal UUID from `users.id`
+ */
+export async function grantCredits(userId: string, amount: number): Promise<number | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.rpc("increment_credits", { uid: userId, amt: amount });
+  if (error) throw error;
+  return typeof data === "number" ? data : null;
+}
+
+/**
+ * Records a Stripe event id so it's processed at most once. Returns true if this
+ * is the FIRST time we've seen it (caller should process), false if it's a
+ * duplicate/replay (caller should skip). Relies on the primary-key uniqueness.
+ */
+export async function markStripeEventProcessed(eventId: string, type: string): Promise<boolean> {
+  const supabase = getSupabase();
+  const { error } = await supabase.from("stripe_events").insert({ id: eventId, type });
+  if (error) {
+    if (error.code === "23505") return false; // duplicate → already processed
+    throw error;
+  }
+  return true;
+}
+
+/**
+ * Finds a user by their Clerk id (no creation). Used by the webhook, which has
+ * no auth context. Returns null if unknown.
+ */
+export async function getUserByClerkId(clerkUserId: string): Promise<UserRecord | null> {
+  const supabase = getSupabase();
+  const { data } = await supabase
+    .from("users")
+    .select("*")
+    .eq("clerk_user_id", clerkUserId)
+    .single<UserRecord>();
+  return data ?? null;
+}
+
+/** Finds a user by Stripe customer id (for invoice/subscription webhooks). */
+export async function getUserByStripeCustomer(customerId: string): Promise<UserRecord | null> {
+  const supabase = getSupabase();
+  const { data } = await supabase
+    .from("users")
+    .select("*")
+    .eq("stripe_customer_id", customerId)
+    .single<UserRecord>();
+  return data ?? null;
+}
+
+/** Persists a user's Stripe customer id. */
+export async function setStripeCustomerId(userId: string, customerId: string): Promise<void> {
+  const supabase = getSupabase();
+  await supabase.from("users").update({ stripe_customer_id: customerId }).eq("id", userId);
+}
+
+/** Updates subscription state (status + plan key + optional subscription id). */
+export async function setSubscription(
+  userId: string,
+  fields: { status: string | null; plan?: string | null; subscriptionId?: string | null }
+): Promise<void> {
+  const supabase = getSupabase();
+  const update: Record<string, unknown> = { subscription_status: fields.status };
+  if (fields.plan !== undefined) update.subscription_plan = fields.plan;
+  if (fields.subscriptionId !== undefined) update.stripe_subscription_id = fields.subscriptionId;
+  await supabase.from("users").update(update).eq("id", userId);
+}
+
+/**
  * Loads one generation, scoped to its owner. Returns null if it doesn't exist
  * or belongs to someone else — this is the ownership gate for the listing route.
  *

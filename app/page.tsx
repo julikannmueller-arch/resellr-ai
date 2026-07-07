@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { LangProvider } from "@/contexts/LangContext";
 import Navigation, { Tab } from "@/components/Navigation";
 import ProgressBar from "@/components/ProgressBar";
 import GeneratorView from "@/components/GeneratorView";
@@ -14,7 +13,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
 
   return (
-    <LangProvider>
+    <>
       <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
       <ProgressBar isLoading={isLoading} />
 
@@ -57,7 +56,7 @@ export default function Home() {
       </main>
 
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
-    </LangProvider>
+    </>
   );
 }
 
